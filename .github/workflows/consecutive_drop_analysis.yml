@@ -2,11 +2,13 @@ name: ETF Daily Investment Analysis
 
 on:
   schedule:
-    - cron: '30 7 * * *' 
+    - cron: '30 7 * * *' # 北京时间 15:30
   push:
     paths:
       - 'consecutive_drop_analysis.py'
+      - '.github/workflows/consecutive_drop_analysis.yml'
       - 'ETF列表.txt'
+      - 'fund_data/**'
   workflow_dispatch:
 
 jobs:
@@ -19,7 +21,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 获取完整历史以供回测分析
+          fetch-depth: 0 # 获取历史记录用于比对
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -36,7 +38,15 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add investment_decision.csv performance_tracking.csv
-          git add history/**/decision_*.csv
-          git commit -m "Update decisions and performance tracking: $(date +'%Y-%m-%d')" || true
+          
+          # 鲁棒性添加文件
+          git add investment_decision.csv || echo "No investment_decision"
+          git add performance_tracking.csv || echo "No performance_tracking"
+          
+          # 确保添加 history 目录下的所有新文件
+          if [ -d history ]; then
+            git add history/
+          fi
+          
+          git commit -m "Daily update: $(date +'%Y-%m-%d %H:%M')" || exit 0
           git push
