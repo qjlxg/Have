@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import glob
+import re
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 
@@ -9,92 +10,106 @@ DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
 
 def get_target_codes():
-    """读取目标ETF列表，兼容不同编码"""
+    """从包含简称的文本中提取纯数字代码"""
     if not os.path.exists(ETF_LIST_FILE):
-        print(f"File not found: {ETF_LIST_FILE}")
+        print(f"警告: 未找到 {ETF_LIST_FILE}")
         return None
+    
+    target_codes = set()
     for enc in ['utf-8', 'gbk', 'utf-16']:
         try:
             with open(ETF_LIST_FILE, 'r', encoding=enc) as f:
-                # 提取代码，去除 .csv 后缀和空格
-                return set(line.strip().replace('.csv', '') for line in f if line.strip())
+                for line in f:
+                    # 使用正则匹配 6 位数字
+                    match = re.search(r'(\d{6})', line)
+                    if match:
+                        target_codes.add(match.group(1))
+            if target_codes:
+                print(f"成功加载目标列表，共计 {len(target_codes)} 个标的")
+                return target_codes
         except:
             continue
     return None
 
 def analyze_file(file_path):
-    """核心逻辑：统计连续下跌天数和幅度"""
+    """核心分析逻辑"""
     try:
-        # 读取数据，指定日期解析
-        df = pd.read_csv(file_path)
+        # 只读取关键列，提升速度
+        df = pd.read_csv(file_path, usecols=['日期', '涨跌幅'])
         if df.empty:
             return None
         
-        # 统一表头格式（去除空格）
-        df.columns = [c.strip() for c in df.columns]
+        # 转换日期并倒序排列（最新日期在前）
         df['日期'] = pd.to_datetime(df['日期'])
-        
-        # 按日期倒序（最新日期在第一行）
         df = df.sort_values('日期', ascending=False).reset_index(drop=True)
         
         count = 0
         total_drop_pct = 0.0
         
-        # 遍历数据：从最新日期开始
+        # 从第一行（最新日期）开始循环
         for i in range(len(df)):
             try:
-                # 强制转为浮点数
+                # 转换涨跌幅为浮点数（处理可能存在的空值或异常字符串）
                 change = float(df.loc[i, '涨跌幅'])
                 if change < 0:
                     count += 1
                     total_drop_pct += change
                 else:
-                    # 只要不小于0（上涨或平盘）即停止统计
+                    # 遇到上涨或平盘，中断循环
                     break
-            except (ValueError, TypeError):
+            except:
                 break
         
-        # 只有在最新状态是下跌时才返回结果
+        # 仅返回有连续下跌记录的数据
         if count > 0:
-            code = os.path.basename(file_path).replace('.csv', '')
+            # 从文件名提取 6 位代码
+            code_match = re.search(r'(\d{6})', os.path.basename(file_path))
+            code = code_match.group(1) if code_match else "Unknown"
+            
             return {
-                '基金代码': code,
+                '代码': code,
                 '连续下跌天数': count,
                 '累计跌幅(%)': round(total_drop_pct, 2),
-                '最近交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
+                '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
             }
-    except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+    except Exception:
+        return None
     return None
 
 def main():
     target_codes = get_target_codes()
-    # 获取 fund_data 目录下所有 csv
-    all_files = glob.glob(os.path.join(DATA_DIR, '*.csv'))
+    # 查找 fund_data 下的所有 csv
+    all_files = glob.glob(os.path.join(DATA_DIR, "*.csv"))
     
-    # 筛选出在列表中的文件
+    if not all_files:
+        print(f"错误: 在 {DATA_DIR} 目录下没有找到任何 CSV 文件。")
+        return
+
+    # 匹配过滤
+    tasks = []
     if target_codes:
-        tasks = [f for f in all_files if os.path.basename(f).replace('.csv', '') in target_codes]
+        for f in all_files:
+            file_name_code = re.search(r'(\d{6})', os.path.basename(f))
+            if file_name_code and file_name_code.group(1) in target_codes:
+                tasks.append(f)
     else:
         tasks = all_files
 
-    if not tasks:
-        print("No matching CSV files found.")
-        return
+    print(f"开始并行处理 {len(tasks)} 个匹配的 CSV 文件...")
 
-    # 并行处理加速
     results = []
+    # 使用并行计算加速
     with ProcessPoolExecutor() as executor:
         for res in executor.map(analyze_file, tasks):
             if res:
                 results.append(res)
 
     if results:
-        res_df = pd.DataFrame(results).sort_values('连续下跌天数', ascending=False)
+        res_df = pd.DataFrame(results).sort_values(by=['连续下跌天数', '累计跌幅(%)'], ascending=[False, True])
         res_df.to_csv('temp_result.csv', index=False, encoding='utf-8-sig')
-        print(f"Success: Found {len(results)} matching funds.")
+        print(f"分析成功: 发现 {len(results)} 个连续下跌标的。")
     else:
-        print("No funds found with consecutive drops.")
+        print("分析完成: 未发现符合连续下跌条件的标的。")
 
 if __name__ == "__main__":
     main()
