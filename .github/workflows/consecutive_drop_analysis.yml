@@ -2,7 +2,7 @@ name: ETF Daily Investment Analysis
 
 on:
   schedule:
-    - cron: '30 7 * * *' # 北京时间 15:30
+    - cron: '45 7 * * *' 
   push:
     paths:
       - 'consecutive_drop_analysis.py'
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 获取历史记录用于比对
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -39,7 +39,6 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          # 鲁棒性添加文件
           git add investment_decision.csv || echo "No investment_decision"
           git add performance_tracking.csv || echo "No performance_tracking"
           
