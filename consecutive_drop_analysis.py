@@ -8,8 +8,8 @@ from concurrent.futures import ProcessPoolExecutor
 # --- 交易逻辑配置 ---
 DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
-MIN_TURNOVER = 1000000       # 硬性过滤：日成交额低于 100 万(元)的排除
-AVG_DAYS = 5                 # 计算 MA5 和平均成交量的周期
+MIN_TURNOVER = 1000000       # 硬性过滤：日成交额低于 100 万(元)
+AVG_DAYS = 5                 # 计算 MA5 和量比的周期
 # ------------------
 
 def get_target_mapping():
@@ -37,16 +37,16 @@ def analyze_file(file_info):
         code = code_match.group(1)
         
         df = pd.read_csv(file_path, usecols=['日期', '收盘', '成交量', '成交额', '涨跌幅', '振幅'])
-        if len(df) < 10: return None # 确保有足够数据计算均线
+        if len(df) < 10: return None
         
         df['日期'] = pd.to_datetime(df['日期'])
         df = df.sort_values('日期', ascending=False).reset_index(drop=True)
         
-        # 1. 流动性过滤
+        # 1. 基础过滤：流动性
         last_turnover = float(df.loc[0, '成交额'])
         if last_turnover < MIN_TURNOVER: return None
             
-        # 2. 连续下跌计算
+        # 2. 连续下跌（天数 & 累跌）
         count = 0
         total_drop_pct = 0.0
         for i in range(len(df)):
@@ -58,18 +58,25 @@ def analyze_file(file_info):
         
         if count == 0: return None
 
-        # 3. 均线偏离度 (BIAS) 计算
-        # BIAS = (当日收盘价 - N日均价) / N日均价 * 100
+        # 3. 均线与量比
         ma5 = df.loc[0:AVG_DAYS-1, '收盘'].mean()
         last_price = df.loc[0, '收盘']
         bias = round(((last_price - ma5) / ma5) * 100, 2)
-        
-        # 4. 缩量分析 (量比)
         avg_vol = df.loc[1:AVG_DAYS, '成交量'].mean()
         vol_ratio = round(df.loc[0, '成交量'] / avg_vol, 2) if avg_vol > 0 else 0
         
-        # 5. 自动解读决策
-        # 逻辑：偏离度越负(超跌) + 量比越小(缩量) + 下跌天数多 = 机会越大
+        # 4. 新增：多周期涨跌幅统计 (计算方式：(现价 - N天前价) / N天前价)
+        def get_period_change(days):
+            if len(df) > days:
+                prev_price = df.loc[days, '收盘']
+                return round(((last_price - prev_price) / prev_price) * 100, 2)
+            return None
+
+        week_change = get_period_change(5)    # 周
+        month_change = get_period_change(20)  # 月
+        year_change = get_period_change(250)  # 年（约250个交易日）
+
+        # 5. 自动决策逻辑优化
         decision = "观察"
         if bias < -3 and vol_ratio < 0.8 and count >= 3:
             decision = "★★★ 极度超跌(买入建议)"
@@ -81,13 +88,16 @@ def analyze_file(file_info):
         return {
             '代码': code,
             '名称': name_mapping.get(code, "未知"),
-            '天数': count,
-            '累跌%': round(total_drop_pct, 2),
+            '连跌天数': count,
+            '连跌%': round(total_drop_pct, 2),
+            '周幅%': week_change,
+            '月幅%': month_change,
+            '年幅%': year_change,
             'MA5偏离%': bias,
             '量比': vol_ratio,
             '成交额(万)': round(last_turnover / 10000, 2),
             '决策建议': decision,
-            '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
+            '日期': df.loc[0, '日期'].strftime('%Y-%m-%d')
         }
     except Exception: return None
 
@@ -103,13 +113,13 @@ def main():
 
     if results:
         res_df = pd.DataFrame(results).sort_values(
-            by=['决策建议', 'MA5偏离%', '天数'], 
+            by=['决策建议', 'MA5偏离%', '连跌天数'], 
             ascending=[False, True, False]
         )
+        # 调整列顺序，更直观
+        res_df = res_df[['代码', '名称', '决策建议', '连跌天数', '连跌%', '周幅%', '月幅%', '年幅%', 'MA5偏离%', '量比', '成交额(万)', '日期']]
         res_df.to_csv('investment_decision.csv', index=False, encoding='utf-8-sig')
-        print(f"分析完成，已生成带决策建议的报告。")
-    else:
-        print("未发现符合条件的标的。")
+        print(f"分析完成，已生成多周期决策报告。")
 
 if __name__ == "__main__":
     main()
