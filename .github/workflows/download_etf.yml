@@ -2,17 +2,16 @@ name: Update ETF Data
 
 on:
   schedule:
-    # 北京时间 23:00 对应 UTC 15:00
-    - cron: '0 15 * * *'
+    
+    - cron: '25 7 * * *'
   push:
     # 当脚本或 yml 本身变动时触发
     paths:
       - 'download_etf.py'
-      - '.github/workflows/main.yml'
+      - '.github/workflows/download_etf.yml'
       - 'etf.txt'
   workflow_dispatch: # 支持手动运行
 
-# 赋予工作流写权限，防止由于权限问题导致的推送失败
 permissions:
   contents: write
 
@@ -23,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          # fetch-depth: 0 表示获取所有历史记录，这对 pull --rebase 更稳定
+          # fetch-depth: 0 
           fetch-depth: 0
 
       - name: Set up Python
@@ -53,8 +52,7 @@ jobs:
           else
             git commit -m "Auto-update ETF data: $(date +'%Y-%m-%d %H:%M:%S')"
             
-            # 【关键步骤】推送前先拉取远程更新并变基，解决 "rejected (fetch first)" 报错
-            # 如果有冲突，这里会使用远程版本为主，保证工作流不中断
+         
             git pull --rebase origin main
             
             git push origin main
