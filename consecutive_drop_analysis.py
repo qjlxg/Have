@@ -9,72 +9,80 @@ DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
 
 def get_target_codes():
+    """读取目标ETF列表，兼容不同编码"""
     if not os.path.exists(ETF_LIST_FILE):
-        print(f"警告: 找不到 {ETF_LIST_FILE}")
+        print(f"File not found: {ETF_LIST_FILE}")
         return None
-    # 尝试多种编码读取列表
     for enc in ['utf-8', 'gbk', 'utf-16']:
         try:
             with open(ETF_LIST_FILE, 'r', encoding=enc) as f:
-                codes = set(line.strip().replace('.csv', '') for line in f if line.strip())
-                print(f"成功读取列表，包含 {len(codes)} 个目标")
-                return codes
+                # 提取代码，去除 .csv 后缀和空格
+                return set(line.strip().replace('.csv', '') for line in f if line.strip())
         except:
             continue
     return None
 
 def analyze_file(file_path):
+    """核心逻辑：统计连续下跌天数和幅度"""
     try:
-        # 只读取必要的列以加快速度
-        df = pd.read_csv(file_path, usecols=['日期', '涨跌幅'], parse_dates=['日期'])
-        if df.empty or len(df) < 1:
+        # 读取数据，指定日期解析
+        df = pd.read_csv(file_path)
+        if df.empty:
             return None
         
-        # 按日期倒序排列
+        # 统一表头格式（去除空格）
+        df.columns = [c.strip() for c in df.columns]
+        df['日期'] = pd.to_datetime(df['日期'])
+        
+        # 按日期倒序（最新日期在第一行）
         df = df.sort_values('日期', ascending=False).reset_index(drop=True)
         
         count = 0
         total_drop_pct = 0.0
         
-        # 计算逻辑：从最新的一天开始往回数
+        # 遍历数据：从最新日期开始
         for i in range(len(df)):
-            change_pct = float(df.loc[i, '涨跌幅'])
-            if change_pct < 0:
-                count += 1
-                total_drop_pct += change_pct
-            else:
-                # 遇到非负（上涨或平盘）立即停止
+            try:
+                # 强制转为浮点数
+                change = float(df.loc[i, '涨跌幅'])
+                if change < 0:
+                    count += 1
+                    total_drop_pct += change
+                else:
+                    # 只要不小于0（上涨或平盘）即停止统计
+                    break
+            except (ValueError, TypeError):
                 break
         
-        # 只有连续下跌（至少1天）才记录
+        # 只有在最新状态是下跌时才返回结果
         if count > 0:
             code = os.path.basename(file_path).replace('.csv', '')
             return {
-                '代码': code,
+                '基金代码': code,
                 '连续下跌天数': count,
                 '累计跌幅(%)': round(total_drop_pct, 2),
-                '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
+                '最近交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
             }
     except Exception as e:
-        pass # 忽略格式错误的csv
+        print(f"Error processing {file_path}: {e}")
     return None
 
 def main():
     target_codes = get_target_codes()
-    # 查找 fund_data 下的所有 csv
+    # 获取 fund_data 目录下所有 csv
     all_files = glob.glob(os.path.join(DATA_DIR, '*.csv'))
     
-    # 并行筛选匹配的文件
-    tasks = []
+    # 筛选出在列表中的文件
     if target_codes:
         tasks = [f for f in all_files if os.path.basename(f).replace('.csv', '') in target_codes]
     else:
         tasks = all_files
 
     if not tasks:
-        print("没有找到匹配待处理的文件。")
+        print("No matching CSV files found.")
         return
 
+    # 并行处理加速
     results = []
     with ProcessPoolExecutor() as executor:
         for res in executor.map(analyze_file, tasks):
@@ -82,11 +90,11 @@ def main():
                 results.append(res)
 
     if results:
-        res_df = pd.DataFrame(results).sort_values(['连续下跌天数', '累计跌幅(%)'], ascending=[False, True])
+        res_df = pd.DataFrame(results).sort_values('连续下跌天数', ascending=False)
         res_df.to_csv('temp_result.csv', index=False, encoding='utf-8-sig')
-        print(f"分析完成，发现 {len(results)} 个连续下跌标的。")
+        print(f"Success: Found {len(results)} matching funds.")
     else:
-        print("未发现符合连续下跌条件的标的。")
+        print("No funds found with consecutive drops.")
 
 if __name__ == "__main__":
     main()
