@@ -1,30 +1,25 @@
 name: ETF Daily Investment Analysis
 
 on:
-  # 1. 定时触发：每天北京时间 15:30 运行
   schedule:
     - cron: '30 7 * * *' 
-    
-  # 2. 代码变动触发：当以下文件发生变动并 push 时自动运行
   push:
     paths:
       - 'consecutive_drop_analysis.py'
-      - '.github/workflows/consecutive_drop_analysis.yml'
       - 'ETF列表.txt'
-      - 'fund_data/**'  # 如果数据文件夹变动也触发
-
-  # 3. 手动触发：允许在 Actions 页面点击 Run workflow
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     permissions:
-      contents: write 
+      contents: write
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # 获取完整历史以供回测分析
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -32,29 +27,16 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas
+        run: pip install pandas
 
-      - name: Run Analysis Script
-        run: |
-          python consecutive_drop_analysis.py
+      - name: Run Analysis
+        run: python consecutive_drop_analysis.py
 
-      - name: Check for Output File
-        id: check_file
-        run: |
-          if [ -f "investment_decision.csv" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Commit and Push Results
-        if: steps.check_file.outputs.exists == 'true'
+      - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add investment_decision.csv
-          # 使用 --allow-empty 确保即使文件内容没变也不会报错导致流程显示失败
-          git commit -m "自动更新每日买入决策报告: $(date +'%Y-%m-%d %H:%M')" || true
+          git add investment_decision.csv performance_tracking.csv
+          git add history/**/decision_*.csv
+          git commit -m "Update decisions and performance tracking: $(date +'%Y-%m-%d')" || true
           git push
