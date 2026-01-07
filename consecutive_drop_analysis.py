@@ -5,15 +5,15 @@ import re
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 
-# --- 配置区 ---
+# --- 交易逻辑配置 ---
 DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
-MIN_TURNOVER = 1000000  # 过滤门槛：日成交额低于 100 万(元)的直接排除
-# --------------
+MIN_TURNOVER = 1000000       # 硬性过滤：日成交额低于 100 万(元)的排除
+AVG_DAYS = 5                 # 计算 MA5 和平均成交量的周期
+# ------------------
 
 def get_target_mapping():
-    if not os.path.exists(ETF_LIST_FILE):
-        return {}
+    if not os.path.exists(ETF_LIST_FILE): return {}
     mapping = {}
     for enc in ['utf-8', 'gbk', 'utf-16']:
         try:
@@ -36,55 +36,65 @@ def analyze_file(file_info):
         if not code_match: return None
         code = code_match.group(1)
         
-        # 加载数据，增加成交量和成交额列
-        df = pd.read_csv(file_path, usecols=['日期', '涨跌幅', '成交量', '成交额'])
-        if df.empty: return None
+        df = pd.read_csv(file_path, usecols=['日期', '收盘', '成交量', '成交额', '涨跌幅', '振幅'])
+        if len(df) < 10: return None # 确保有足够数据计算均线
         
         df['日期'] = pd.to_datetime(df['日期'])
         df = df.sort_values('日期', ascending=False).reset_index(drop=True)
         
-        # 1. 过滤退市风险/流动性风险：检查最新一天的成交额
+        # 1. 流动性过滤
         last_turnover = float(df.loc[0, '成交额'])
-        if last_turnover < MIN_TURNOVER:
-            return None
+        if last_turnover < MIN_TURNOVER: return None
             
-        # 2. 计算连续下跌
+        # 2. 连续下跌计算
         count = 0
         total_drop_pct = 0.0
         for i in range(len(df)):
-            try:
-                change = float(df.loc[i, '涨跌幅'])
-                if change < 0:
-                    count += 1
-                    total_drop_pct += change
-                else:
-                    break
-            except: break
+            change = float(df.loc[i, '涨跌幅'])
+            if change < 0:
+                count += 1
+                total_drop_pct += change
+            else: break
         
-        if count > 0:
-            return {
-                '代码': code,
-                '名称': name_mapping.get(code, "未知"),
-                '连续下跌天数': count,
-                '累计跌幅(%)': round(total_drop_pct, 2),
-                '成交额(元)': round(last_turnover, 2),
-                '成交量(手)': df.loc[0, '成交量'],
-                '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
-            }
+        if count == 0: return None
+
+        # 3. 均线偏离度 (BIAS) 计算
+        # BIAS = (当日收盘价 - N日均价) / N日均价 * 100
+        ma5 = df.loc[0:AVG_DAYS-1, '收盘'].mean()
+        last_price = df.loc[0, '收盘']
+        bias = round(((last_price - ma5) / ma5) * 100, 2)
+        
+        # 4. 缩量分析 (量比)
+        avg_vol = df.loc[1:AVG_DAYS, '成交量'].mean()
+        vol_ratio = round(df.loc[0, '成交量'] / avg_vol, 2) if avg_vol > 0 else 0
+        
+        # 5. 自动解读决策
+        # 逻辑：偏离度越负(超跌) + 量比越小(缩量) + 下跌天数多 = 机会越大
+        decision = "观察"
+        if bias < -3 and vol_ratio < 0.8 and count >= 3:
+            decision = "★★★ 极度超跌(买入建议)"
+        elif bias < -1.5 and vol_ratio < 1.0:
+            decision = "★★ 缩量回调(关注)"
+        elif vol_ratio > 1.5 and last_price < ma5:
+            decision = "放量下跌(风险)"
+
+        return {
+            '代码': code,
+            '名称': name_mapping.get(code, "未知"),
+            '天数': count,
+            '累跌%': round(total_drop_pct, 2),
+            'MA5偏离%': bias,
+            '量比': vol_ratio,
+            '成交额(万)': round(last_turnover / 10000, 2),
+            '决策建议': decision,
+            '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
+        }
     except Exception: return None
-    return None
 
 def main():
     name_mapping = get_target_mapping()
     all_files = glob.glob(os.path.join(DATA_DIR, "*.csv"))
-    if not all_files: return
-
-    tasks = []
-    target_codes = set(name_mapping.keys())
-    for f in all_files:
-        code_match = re.search(r'(\d{6})', os.path.basename(f))
-        if code_match and code_match.group(1) in target_codes:
-            tasks.append((f, name_mapping))
+    tasks = [(f, name_mapping) for f in all_files]
 
     results = []
     with ProcessPoolExecutor() as executor:
@@ -92,13 +102,14 @@ def main():
             if res: results.append(res)
 
     if results:
-        res_df = pd.DataFrame(results).sort_values(by=['连续下跌天数', '累计跌幅(%)'], ascending=[False, True])
-        # 重新排序列，确保直观
-        res_df = res_df[['代码', '名称', '连续下跌天数', '累计跌幅(%)', '成交额(元)', '成交量(手)', '最后交易日']]
-        res_df.to_csv('temp_result.csv', index=False, encoding='utf-8-sig')
-        print(f"分析完成: 筛选出 {len(results)} 个活跃且连续下跌的标的。")
+        res_df = pd.DataFrame(results).sort_values(
+            by=['决策建议', 'MA5偏离%', '天数'], 
+            ascending=[False, True, False]
+        )
+        res_df.to_csv('investment_decision.csv', index=False, encoding='utf-8-sig')
+        print(f"分析完成，已生成带决策建议的报告。")
     else:
-        print("未发现符合条件的标的（可能已被成交额过滤）。")
+        print("未发现符合条件的标的。")
 
 if __name__ == "__main__":
     main()
