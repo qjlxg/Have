@@ -7,73 +7,86 @@ from concurrent.futures import ProcessPoolExecutor
 # 配置路径
 DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
-OUTPUT_BASE = 'results'
 
 def get_target_codes():
     if not os.path.exists(ETF_LIST_FILE):
+        print(f"警告: 找不到 {ETF_LIST_FILE}")
         return None
-    with open(ETF_LIST_FILE, 'r', encoding='utf-8') as f:
-        return set(line.strip() for line in f if line.strip())
+    # 尝试多种编码读取列表
+    for enc in ['utf-8', 'gbk', 'utf-16']:
+        try:
+            with open(ETF_LIST_FILE, 'r', encoding=enc) as f:
+                codes = set(line.strip().replace('.csv', '') for line in f if line.strip())
+                print(f"成功读取列表，包含 {len(codes)} 个目标")
+                return codes
+        except:
+            continue
+    return None
 
 def analyze_file(file_path):
     try:
-        df = pd.read_csv(file_path)
-        if df.empty or len(df) < 2:
+        # 只读取必要的列以加快速度
+        df = pd.read_csv(file_path, usecols=['日期', '涨跌幅'], parse_dates=['日期'])
+        if df.empty or len(df) < 1:
             return None
         
-        # 确保按日期降序排列（最新在前）
-        df['日期'] = pd.to_datetime(df['日期'])
+        # 按日期倒序排列
         df = df.sort_values('日期', ascending=False).reset_index(drop=True)
         
         count = 0
         total_drop_pct = 0.0
         
-        # 计算连续下跌（今日收盘 < 昨日收盘）
-        # 注意：CSV中 涨跌幅 字段已经是百分比，如 -1.3 表示 -1.3%
-        for i in range(len(df) - 1):
-            change_pct = df.loc[i, '涨跌幅']
+        # 计算逻辑：从最新的一天开始往回数
+        for i in range(len(df)):
+            change_pct = float(df.loc[i, '涨跌幅'])
             if change_pct < 0:
                 count += 1
                 total_drop_pct += change_pct
             else:
+                # 遇到非负（上涨或平盘）立即停止
                 break
         
+        # 只有连续下跌（至少1天）才记录
         if count > 0:
             code = os.path.basename(file_path).replace('.csv', '')
             return {
-                '基金代码': code,
+                '代码': code,
                 '连续下跌天数': count,
                 '累计跌幅(%)': round(total_drop_pct, 2),
                 '最后交易日': df.loc[0, '日期'].strftime('%Y-%m-%d')
             }
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        pass # 忽略格式错误的csv
     return None
 
 def main():
     target_codes = get_target_codes()
-    files = glob.glob(os.path.join(DATA_DIR, '*.csv'))
+    # 查找 fund_data 下的所有 csv
+    all_files = glob.glob(os.path.join(DATA_DIR, '*.csv'))
     
-    # 筛选匹配 ETF列表 的文件
+    # 并行筛选匹配的文件
+    tasks = []
     if target_codes:
-        files = [f for f in files if os.path.basename(f).replace('.csv', '') in target_codes]
+        tasks = [f for f in all_files if os.path.basename(f).replace('.csv', '') in target_codes]
+    else:
+        tasks = all_files
+
+    if not tasks:
+        print("没有找到匹配待处理的文件。")
+        return
 
     results = []
-    # 使用进程池并行处理
     with ProcessPoolExecutor() as executor:
-        for res in executor.map(analyze_file, files):
+        for res in executor.map(analyze_file, tasks):
             if res:
                 results.append(res)
 
     if results:
-        res_df = pd.DataFrame(results).sort_values('连续下跌天数', ascending=False)
-        # 生成输出内容
-        return res_df
-    return None
+        res_df = pd.DataFrame(results).sort_values(['连续下跌天数', '累计跌幅(%)'], ascending=[False, True])
+        res_df.to_csv('temp_result.csv', index=False, encoding='utf-8-sig')
+        print(f"分析完成，发现 {len(results)} 个连续下跌标的。")
+    else:
+        print("未发现符合连续下跌条件的标的。")
 
 if __name__ == "__main__":
-    analysis_res = main()
-    if analysis_res is not None:
-        # 结果由 Workflow 处理保存路径，此处直接打印或存为临时文件
-        analysis_res.to_csv('temp_result.csv', index=False, encoding='utf-8-sig')
-        print("Analysis completed successfully.")
+    main()
