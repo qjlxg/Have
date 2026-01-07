@@ -1,0 +1,63 @@
+name: Update ETF Data
+
+on:
+  schedule:
+    # 北京时间 23:00 对应 UTC 15:00
+    - cron: '0 15 * * *'
+  push:
+    # 当脚本或 yml 本身变动时触发
+    paths:
+      - 'download_etf.py'
+      - '.github/workflows/main.yml'
+      - 'etf.txt'
+  workflow_dispatch: # 支持手动运行
+
+# 赋予工作流写权限，防止由于权限问题导致的推送失败
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          # fetch-depth: 0 表示获取所有历史记录，这对 pull --rebase 更稳定
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install akshare pandas
+
+      - name: Run download script
+        run: python download_etf.py
+
+      - name: Commit and Push changes
+        run: |
+          # 配置 Git 用户信息
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 暂存数据文件
+          git add fund_data/*.csv
+          
+          # 检查是否有变动
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update ETF data: $(date +'%Y-%m-%d %H:%M:%S')"
+            
+            # 【关键步骤】推送前先拉取远程更新并变基，解决 "rejected (fetch first)" 报错
+            # 如果有冲突，这里会使用远程版本为主，保证工作流不中断
+            git pull --rebase origin main
+            
+            git push origin main
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
