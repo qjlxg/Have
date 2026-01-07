@@ -1,0 +1,50 @@
+name: consecutive_drop_analysis
+
+on:
+  push:
+    paths:
+      - 'consecutive_drop_analysis.py'
+      - '.github/workflows/consecutive_drop_analysis.yml'
+  workflow_dispatch: # 支持手动运行
+
+jobs:
+  analyze_and_push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas
+
+      - name: Run Analysis
+        run: python consecutive_drop_analysis.py
+
+      - name: Create Directory and Move File
+        run: |
+          # 设置上海时区
+          export TZ="Asia/Shanghai"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          YEAR_MONTH=$(date +%Y%m)
+          
+          # 创建年月目录
+          mkdir -p "results/${YEAR_MONTH}"
+          
+          # 重命名并移动文件：文件名+时间戳
+          if [ -f "temp_result.csv" ]; then
+            mv temp_result.csv "results/${YEAR_MONTH}/consecutive_drop_analysis_${TIMESTAMP}.csv"
+          fi
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add results/
+          git commit -m "Auto-update analysis: $(date +'%Y-%m-%d %H:%M:%S')" || exit 0
+          git push
