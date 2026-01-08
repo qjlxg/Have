@@ -1,0 +1,55 @@
+name: ETF AI Strategy Analysis
+
+on:
+  schedule:
+    - cron: '45 7 * * *' # 北京时间 15:45 自动运行
+  push:
+    paths:
+      - 'consecutive_drop_analysis.py'
+      - '.github/workflows/*.yml' # 监控所有工作流文件变动
+      - 'ETF列表.txt'
+      - 'fund_data/**'
+  workflow_dispatch: # 支持手动点击按钮运行
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        # 核心：增加了 numpy 依赖安装
+        run: pip install pandas numpy
+
+      - name: Run AI Strategy Analysis
+        # 运行全自动复盘脚本
+        run: python consecutive_drop_analysis.py
+
+      - name: Commit and Push Results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 强制同步最新生成的所有核心文件
+          git add investment_decision.csv || echo "Skip decision"
+          git add performance_tracking.csv || echo "Skip tracking"
+          
+          # 归档历史复盘记录
+          if [ -d history ]; then
+            git add history/
+          fi
+          
+          # 动态提交信息，方便在 GitHub Actions 列表一眼看到结果
+          git commit -m "AI复盘自动更新: $(date +'%Y-%m-%d %H:%M') | 策略信号已就绪" || exit 0
+          git push
