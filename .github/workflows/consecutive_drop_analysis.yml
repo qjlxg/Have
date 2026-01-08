@@ -19,9 +19,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 必须为0，否则脚本无法读历史文件做胜率统计
+          fetch-depth: 0 # 必须为0以读取历史记录
 
-      - name: Environment
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
@@ -29,13 +29,18 @@ jobs:
       - name: Install
         run: pip install pandas numpy
 
-      - name: Run
+      - name: Run Analysis
         run: python consecutive_drop_analysis.py
 
-      - name: Push
+      - name: Commit and Push
         run: |
           git config --local user.email "bot@github.com"
           git config --local user.name "AI-Trader-Bot"
-          git add investment_decision.csv Strategy_Backtest_Summary.txt history/
-          git commit -m "AI复盘与胜率汇总: $(date +'%Y-%m-%d')" || exit 0
-          git push
+          
+          # 智能添加：仅当文件存在时才 add
+          [ -f investment_decision.csv ] && git add investment_decision.csv
+          [ -f Strategy_Backtest_Summary.txt ] && git add Strategy_Backtest_Summary.txt
+          [ -d history ] && git add history/
+          
+          # 仅在有变动时提交，防止 Action 报错
+          git diff --staged --quiet || (git commit -m "AI复盘更新: $(date +'%Y-%m-%d')" && git push)
