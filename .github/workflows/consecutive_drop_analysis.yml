@@ -2,60 +2,40 @@ name: ETF AI Strategy Analysis
 
 on:
   schedule:
-    # 北京时间 15:45 自动运行（收盘后且数据更新完成）
     - cron: '45 7 * * *' 
   push:
     paths:
-      - 'consecutive_drop_analysis.py'
-      - '.github/workflows/*.yml'
-      - 'ETF列表.txt'
+      - '**.py'
       - 'fund_data/**'
-  workflow_dispatch: # 支持在 GitHub 页面手动点击运行
+  workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须开启写入权限，否则无法提交复盘结果
+      contents: write
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 获取完整历史，以便脚本计算胜率汇总
+          fetch-depth: 0 # 必须为0，否则脚本无法读历史文件做胜率统计
 
-      - name: Set up Python
+      - name: Environment
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Install Dependencies
-        # 增加 numpy 安装，这是计算技术指标的核心
+      - name: Install
         run: pip install pandas numpy
 
-      - name: Run AI Strategy Analysis
-        # 执行脚本，生成决策表、历史报告和胜率汇总
+      - name: Run
         run: python consecutive_drop_analysis.py
 
-      - name: Commit and Push Results
+      - name: Push
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "bot@github.com"
           git config --local user.name "AI-Trader-Bot"
-          
-          # 1. 添加最新的决策表
-          git add investment_decision.csv || echo "Decision file not found"
-          
-          # 2. 添加胜率汇总报告
-          git add Strategy_Backtest_Summary.txt || echo "Summary file not found"
-          
-          # 3. 添加历史业绩跟踪文件
-          git add performance_tracking.csv || echo "Tracking file not found"
-          
-          # 4. 自动添加历史目录下的新报告
-          if [ -d history ]; then
-            git add history/
-          fi
-          
-          # 提交更改
-          git commit -m "AI复盘更新: $(date +'%Y-%m-%d %H:%M') | 包含胜率统计" || exit 0
+          git add investment_decision.csv Strategy_Backtest_Summary.txt history/
+          git commit -m "AI复盘与胜率汇总: $(date +'%Y-%m-%d')" || exit 0
           git push
