@@ -1,0 +1,38 @@
+name: crash_recovery_strategy
+
+on:
+  schedule:
+    # 每天北京时间 17:00 运行 (UTC 9:00)
+    - cron: '0 9 * * *'
+  push:
+    paths:
+      - 'crash_recovery_strategy.py'
+      - '.github/workflows/crash_recovery_strategy.yml'
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy
+
+      - name: Run Strategy Script
+        run: python crash_recovery_strategy.py
+
+      - name: Commit and Push results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add results/
+          git commit -m "Auto-analysis: Crash Recovery Strategy $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+          git push
