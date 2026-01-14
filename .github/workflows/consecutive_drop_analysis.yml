@@ -40,6 +40,7 @@ jobs:
           # 智能添加：仅当文件存在时才 add
           [ -f investment_decision.csv ] && git add investment_decision.csv
           [ -f Strategy_Backtest_Summary.txt ] && git add Strategy_Backtest_Summary.txt
+          [ -f virtual_portfolio.csv ] && git add virtual_portfolio.csv
           [ -d history ] && git add history/
           
           # 仅在有变动时提交，防止 Action 报错
