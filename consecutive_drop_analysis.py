@@ -12,6 +12,7 @@ ETF_LIST_FILE = 'ETF列表.txt'
 PORTFOLIO_FILE = 'virtual_portfolio.csv'
 MIN_TURNOVER = 5000000       
 MIN_SCORE_SIGNAL = 60        
+TARGET_PROFIT = 5.0  # 自动止盈目标 %
 
 def get_target_mapping():
     if not os.path.exists(ETF_LIST_FILE): return {}
@@ -50,12 +51,15 @@ def calculate_tech(df):
     return df.sort_values('日期', ascending=False).reset_index(drop=True)
 
 def update_portfolio(new_signals):
-    """更新虚拟持仓账本，修复FutureWarning并确保文件写入"""
-    cols = ['代码', '名称', '买入日期', '买入价', '当前价', '持有天数', '当前收益%', '信号类型']
+    """更新虚拟持仓账本，并包含自动止盈止损逻辑"""
+    cols = ['代码', '名称', '买入日期', '买入价', '当前价', '止损价', '持有天数', '当前收益%', '信号类型', '状态']
     
     if os.path.exists(PORTFOLIO_FILE):
         try:
             df_p = pd.read_csv(PORTFOLIO_FILE)
+            # 兼容旧版本格式
+            if '状态' not in df_p.columns: df_p['状态'] = '持仓中'
+            if '止损价' not in df_p.columns: df_p['止损价'] = df_p['买入价'] * 0.95
         except:
             df_p = pd.DataFrame(columns=cols)
     else:
@@ -66,46 +70,54 @@ def update_portfolio(new_signals):
     for s in new_signals:
         if s['综合评分'] >= MIN_SCORE_SIGNAL:
             code_str = str(s['代码']).zfill(6)
-            exists = False
+            # 查重：只记录“持仓中”且日期不同的
+            is_holding = False
             if not df_p.empty:
-                exists = ((df_p['代码'].astype(str).str.zfill(6) == code_str) & 
-                          (df_p['买入日期'] == s['日期'])).any()
+                is_holding = ((df_p['代码'].astype(str).str.zfill(6) == code_str) & (df_p['状态'] == '持仓中')).any()
             
-            if not exists:
+            if not is_holding:
                 new_entries.append({
                     '代码': code_str, '名称': s['名称'], '买入日期': s['日期'],
-                    '买入价': s['现价'], '当前价': s['现价'], '持有天数': 0,
-                    '当前收益%': 0.0, '信号类型': s['信号强度']
+                    '买入价': s['现价'], '当前价': s['现价'], '止损价': s['建议止损价'],
+                    '持有天数': 0, '当前收益%': 0.0, '信号类型': s['信号强度'], '状态': '持仓中'
                 })
     
     if new_entries:
         df_p = pd.concat([df_p, pd.DataFrame(new_entries)], ignore_index=True)
 
-    # 2. 刷新价格 (使用 fund_data 里的最新价)
+    # 2. 刷新所有“持仓中”的记录
     if not df_p.empty:
         files = glob.glob(os.path.join(DATA_DIR, "*.csv"))
         for idx, row in df_p.iterrows():
+            if row['状态'] != '持仓中': continue
+            
             code_str = str(row['代码']).zfill(6)
             target_file = [f for f in files if code_str in f]
             if target_file:
                 df_temp = pd.read_csv(target_file[0])
                 if not df_temp.empty:
                     last_row = df_temp.iloc[-1]
-                    last_price = last_row['收盘']
-                    last_date = last_row['日期']
+                    cur_price = last_row['收盘']
+                    cur_date = last_row['日期']
                     
                     d1 = datetime.strptime(str(row['买入日期']), '%Y-%m-%d')
-                    d2 = datetime.strptime(str(last_date), '%Y-%m-%d')
+                    d2 = datetime.strptime(str(cur_date), '%Y-%m-%d')
                     
-                    df_p.at[idx, '当前价'] = last_price
+                    profit = round((cur_price - row['买入价']) / row['买入价'] * 100, 2)
+                    df_p.at[idx, '当前价'] = cur_price
                     df_p.at[idx, '持有天数'] = (d2 - d1).days
-                    df_p.at[idx, '当前收益%'] = round((last_price - row['买入价']) / row['买入价'] * 100, 2)
+                    df_p.at[idx, '当前收益%'] = profit
+
+                    # 判定平仓逻辑
+                    if cur_price < row['止损价']:
+                        df_p.at[idx, '状态'] = '止损退出'
+                    elif profit >= TARGET_PROFIT:
+                        df_p.at[idx, '状态'] = '止盈退出'
 
     df_p.to_csv(PORTFOLIO_FILE, index=False, encoding='utf-8-sig')
     return df_p
 
-# ... analyze_single_file 保持不变 ...
-
+# ... analyze_single_file (维持原样，确保输出建议止损价) ...
 def analyze_single_file(file_info):
     file_path, name_mapping = file_info
     try:
@@ -124,13 +136,12 @@ def analyze_single_file(file_info):
         is_strong = last['RSI'] > 65 and last['收盘'] > last['MA5']
         
         if score_oversold >= 70 and last['J'] > prev['J']:
-            sig, adv, score, sl = "★★★ 超跌反弹", "底部确认，波段持有。", score_oversold, last['最低']
+            sig, adv, score, sl = "★★★ 超跌反弹", "底部确认。", score_oversold, last['最低']
         elif last['RSI'] > 80:
-            sig, adv, score, sl = "☢ 极致超买", "博傻阶段，严守5日线。", -20, round(last['MA5'], 3)
+            sig, adv, score, sl = "☢ 极致超买", "博傻阶段。", -20, round(last['MA5'], 3)
         elif is_strong:
-            sig, adv, score, sl = "🚀 趋势主升", "动能强。5日线为止损线。", 65, round(last['MA5'], 3)
-        else:
-            return None
+            sig, adv, score, sl = "🚀 趋势主升", "动能强。", 65, round(last['MA5'], 3)
+        else: return None
 
         return {
             '代码': code, '名称': name_mapping.get(code, "未知"), '信号强度': sig,
@@ -146,36 +157,27 @@ def main():
     files = glob.glob(os.path.join(DATA_DIR, "*.csv"))
     tasks = [(f, name_mapping) for f in files]
 
-    print(f"🚀 正在扫描全市场标的并更新账本...")
+    print(f"🚀 复盘中...")
     results = []
     with ProcessPoolExecutor() as executor:
         for res in executor.map(analyze_single_file, tasks):
             if res: results.append(res)
 
-    if not results:
-        res_df = pd.DataFrame(columns=['代码', '名称', '信号强度', '操作建议', '综合评分', '建议止损价', '现价', '日期'])
-    else:
-        res_df = pd.DataFrame(results).sort_values(by='综合评分', ascending=False)
-    
+    res_df = pd.DataFrame(results).sort_values(by='综合评分', ascending=False) if results else pd.DataFrame()
     res_df.to_csv('investment_decision.csv', index=False, encoding='utf-8-sig')
+    
     portfolio_df = update_portfolio(results)
     
-    now = datetime.now()
-    h_dir = os.path.join('history', now.strftime('%Y'), now.strftime('%m'))
-    os.makedirs(h_dir, exist_ok=True)
-    res_df.to_csv(os.path.join(h_dir, f"report_{now.strftime('%Y%m%d')}.csv"), index=False, encoding='utf-8-sig')
-
-    print(f"✅ 复盘完成。")
+    print(f"✅ 完成！")
     if not portfolio_df.empty:
-        total = len(portfolio_df)
-        wins = len(portfolio_df[portfolio_df['当前收益%'] > 0])
-        print(f"\n📊 账本统计 | 信号总数: {total} | 胜率: {wins/total*100:.1f}% | 平均浮盈: {portfolio_df['当前收益%'].mean():.2f}%")
-        print("\n📈 表现最好的历史信号 (Top 5):")
-        print(portfolio_df.sort_values(by='当前收益%', ascending=False).head(5)[['代码','名称','买入日期','持有天数','当前收益%']].to_string(index=False))
-
-    if not res_df.empty:
-        print("\n🔥 今日信号摘要:")
-        print(res_df[['代码', '名称', '信号强度', '现价', '建议止损价']].head(5).to_string(index=False))
+        active = portfolio_df[portfolio_df['状态'] == '持仓中']
+        closed = portfolio_df[portfolio_df['状态'] != '持仓中']
+        win_rate = (len(closed[closed['当前收益%'] > 0]) / len(closed) * 100) if not closed.empty else 0
+        
+        print(f"\n📊 统计: 持仓中 {len(active)} 个 | 已结清 {len(closed)} 个 | 已结清胜率: {win_rate:.1f}%")
+        if not active.empty:
+            print("\n📈 当前持仓浮盈 Top 5:")
+            print(active.sort_values(by='当前收益%', ascending=False).head(5)[['代码','名称','买入价','当前收益%']].to_string(index=False))
 
 if __name__ == "__main__":
     main()
