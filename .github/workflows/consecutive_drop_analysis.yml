@@ -5,8 +5,8 @@ on:
     - cron: '45 7 * * *' 
   push:
     paths:
-      - '**.py'
-      - 'fund_data/**'
+      - 'consecutive_drop_analysis.py'
+      - '.github/workflows/consecutive_drop_analysis.yml'
   workflow_dispatch:
 
 jobs:
