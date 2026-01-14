@@ -11,7 +11,7 @@ DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
 PORTFOLIO_FILE = 'virtual_portfolio.csv'
 MIN_TURNOVER = 5000000       
-MIN_SCORE_SIGNAL = 65      
+MIN_SCORE_SIGNAL = 78      
 TARGET_PROFIT = 5.0  # 自动止盈目标 %
 
 def get_target_mapping():
