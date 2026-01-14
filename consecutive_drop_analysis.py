@@ -11,7 +11,7 @@ DATA_DIR = 'fund_data'
 ETF_LIST_FILE = 'ETF列表.txt'
 PORTFOLIO_FILE = 'virtual_portfolio.csv'  # 虚拟持仓账本
 MIN_TURNOVER = 5000000       
-MIN_SCORE_SIGNAL = 70        
+MIN_SCORE_SIGNAL = 65        
 
 def get_target_mapping():
     """读取ETF代码与名称映射"""
